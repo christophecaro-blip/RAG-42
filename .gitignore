@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.mypy_cache/
+.pytest_cache/
+
+# Data (regenerated during evaluation, see subject chapter 9)
+data/raw/
+data/processed/*
+data/output/**/*
+!data/**/.gitkeep
+data+moulinette/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+
+# Grader binary (not ours)
+/moulinette
