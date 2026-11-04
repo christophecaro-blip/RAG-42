@@ -60,3 +60,17 @@ class StudentSearchResultsAndAnswer(BaseModel):
 
     search_results: List[MinimalAnswer]
     k: int
+
+
+class Document(BaseModel):
+    """One corpus file: its path as written in the sources, and its text."""
+
+    file_path: str
+    content: str
+
+
+class Chunk(BaseModel):
+    file_path: str
+    first_char_i: int
+    last_char_i: int
+    text: str

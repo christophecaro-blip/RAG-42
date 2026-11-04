@@ -261,12 +261,46 @@
 📚 Rôle de `__main__.py` et `python -m`, Python Fire (classe → sous-commandes) (§11).
 
 🛠️
-- [ ] Créer `src/__main__.py` avec une classe exposée via `fire.Fire(...)`.
-- [ ] Déclarer `index`, `search`, `search_dataset`, `answer`, `answer_dataset`, `evaluate` avec leurs options.
-- [ ] Vérifier `uv run python -m src --help` et `make run ARGS="search 'test' --k 3"`.
-- [ ] Tester `make debug` : tu tombes bien dans pdb ?
+- [x] Créer `src/__main__.py` avec une classe exposée via `fire.Fire(...)`.
+    -> Classe `CLI`, appel `fire.Fire(CLI)` **sous la garde** `if __name__ == "__main__":`
+       (sinon la CLI se lance dès qu'un autre fichier importe le module, ex. un test).
+- [x] Déclarer `index`, `search`, `search_dataset`, `answer`, `answer_dataset`, `evaluate` avec leurs options.
+    -> Noms des paramètres **identiques au sujet** : ce sont eux qui deviennent les options.
+       Piège rencontré : `student_search_result_path` (sans *s*) → l'option du sujet
+       `--student_search_results_path` était refusée.
+    -> Ordre : `query` en premier pour `search` / `answer` (le sujet écrit `search <query> --k`).
+       Paramètres avec défaut **après** ceux sans défaut (règle Python) → `k` en dernier.
+    -> Défauts : `max_chunk_size = 2000` (imposé), `k = 10` (valeur utilisée partout dans le sujet,
+       et la moulinette tourne en `--k 10`).
+    -> **Validation avec pydantic** (`@validate_call` sur chaque méthode) et types réutilisables :
+
+    | Type | Définition | Refuse |
+    |---|---|---|
+    | `ChunkSize` | `Annotated[int, Field(ge=1, le=2000, strict=True)]` | `0`, `2001`, `abc`, `15.5`, `True` |
+    | `K` | `Annotated[int, Field(ge=1, le=10, strict=True)]` | `0`, `11`, `abc` |
+    | `Query` | `Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]` | `""`, `"   "` |
+    | `FilePath` (pydantic) | le fichier doit exister | fichier absent, dossier |
+
+    -> Pas de `ConfigDict(strict=True)` sur toute la méthode : `FilePath` refuserait alors
+       la chaîne envoyée par Fire (`Input should be an instance of Path`). Le mode strict est
+       mis seulement sur les entiers, via `Field(strict=True)`.
+    -> `ValidationError` interceptée autour de `fire.Fire(CLI)` : un message par erreur sur
+       `stderr`, puis `sys.exit(1)`. Fire passe les arguments par position, donc pydantic
+       donne un indice (`(1,)`) ; `_param_names` le retraduit en nom d'option :
+       ```
+       Error: --dataset_path='nope.json': Path does not point to a file
+       Error: --k=0: Input should be greater than or equal to 1
+       ```
+    -> Piège de version : `f"{e["loc"]}"` (mêmes guillemets dedans et dehors) n'est valide
+       qu'à partir de Python 3.12 → `{e['loc']}`, puisque le projet annonce `>=3.10`.
+- [x] Vérifier `uv run python -m src --help` et `make run ARGS="search 'test' --k 3"`.
+    -> OK : `--help` liste les 6 commandes avec leur docstring ; `make run ...` → code de sortie 0.
+- [x] Tester `make debug` : tu tombes bien dans pdb ?
+    -> OK : `make debug ARGS="search q"` s'arrête sur la 1re ligne de `src/__main__.py` avec
+       l'invite `(Pdb)`.
 
 ✅ Chaque commande affiche ses arguments reçus.
+    -> Les commandes ne font encore rien (`pass`), mais les arguments sont validés.
 
 🎤 Comment Fire transforme-t-il les paramètres d'une méthode en options CLI ? Que se passe-t-il si on passe `--k abc` ?
     -> **Comment Fire construit la CLI** : `fire.Fire(CLI)` lit la classe par introspection
@@ -311,12 +345,87 @@
 📚 `pathlib`, encodage, fins de ligne, chemins relatifs (§1).
 
 🛠️
-- [ ] Parcourir récursivement `data/raw/` et filtrer les extensions retenues à la tâche 1.
-- [ ] Lire chaque fichier en gérant les erreurs (encodage, fichier illisible) sans planter.
-- [ ] Construire le `file_path` exactement au format `data/raw/vllm-0.10.1/...`.
-- [ ] **Vérifier les offsets** : pour quelques sources du dataset, `contenu[first:last]` doit afficher le bon passage.
-- [ ] Ajouter une barre `tqdm`.
+**Architecture retenue** : un module par étape du pipeline, à plat dans `src/`
+(`ingest.py`, puis `chunking.py`, `indexing.py`, `retrieval.py`, `evaluation.py`,
+`generation.py`). `__main__.py` ne contient que la CLI. Les constantes par défaut sont
+dans `src/config.py` (`RAW_DIR`, `EXTENSIONS`, `EXCLUDED_DIRS`).
+
+**Pourquoi pas le `Pipeline` de chonkie pour l'ingestion** (testé) :
+- il découpe bien (chunks ≤ 2000 caractères, offsets exacts),
+- mais chaque document ne garde que `metadata = {"filename": "lora.md"}`, **jamais le chemin
+  complet** : 170 noms distincts pour 206 fichiers (`README.md`, `index.md`…), donc impossible
+  de reconstruire le `file_path` que la moulinette compare ;
+- aussi : un seul découpeur par pipeline, pas d'exclusion de dossiers, une erreur de lecture
+  arrête tout, pas de `tqdm`.
+-> chonkie sera utilisé **seulement pour le découpage** (tâches 6 et 7), sur le contenu lu
+   par `ingest.py`.
+
+🛠️
+- [x] Parcourir récursivement `data/raw/` et filtrer les extensions retenues à la tâche 1.
+    -> `_list_files(root, extensions, excluded)` : `root.rglob("*")`, garde les fichiers dont
+       `suffix` est dans `extensions` et dont aucun élément de `parts` n'est dans `excluded`.
+    -> Résultat **trié** (`sorted`) : l'ordre de `rglob` dépend du système de fichiers, le tri
+       rend l'index identique d'une machine à l'autre.
+    -> 1969 fichiers `.py` / `.md` / `.txt` ; 1268 en excluant `tests`.
+    -> Rappel : `p.parts` contient aussi `data`, `raw`, `vllm-0.10.1` → exclure un de ces noms
+       viderait tout ; `p.relative_to(root).parts` limiterait le test à l'intérieur de la racine.
+- [x] Lire chaque fichier en gérant les erreurs (encodage, fichier illisible) sans planter.
+    -> `_read_file(path)` : `open(path, encoding="utf-8", newline="")` dans un `with`.
+    -> Intercepte `UnicodeDecodeError` et `OSError` (fichier absent, dossier, permission) :
+       avertissement sur `stderr` avec le chemin, puis `return None`. Pas de `except Exception`,
+       qui cacherait de vrais bugs.
+
+    | Cas testé | Résultat |
+    |---|---|
+    | `lora.md` | contenu lu |
+    | `nope.md` | `None` + `Warning: cannot read nope.md: [Errno 2] No such file or directory` |
+    | `data/raw` (dossier) | `None` + `[Errno 21] Is a directory` |
+    | fichier non UTF-8 | `None` + `'utf-8' codec can't decode byte 0xe9…` |
+    | fichier `\r\n` | `'a\r\nb\r\n'` (fins de ligne conservées) |
+
+    -> Le message de `UnicodeDecodeError` ne contient pas le chemin → l'ajouter soi-même.
+    -> mypy exige un `return None` **explicite** dans le `except` (type de retour `str | None`).
+    -> Les fichiers vides ou faits d'espaces sont ignorés dans `ingest` (122 fichiers, surtout
+       des `__init__.py`) : ils ne peuvent répondre à aucune question.
+- [x] Construire le `file_path` exactement au format `data/raw/vllm-0.10.1/...`.
+    -> Racine passée en **relatif** (`Path("data/raw")`) → chemins relatifs à la racine du
+       projet ; `path.as_posix()` garantit des `/`.
+    -> Le modèle pydantic `Document(file_path, content)` (dans `models.py`) transporte le
+       résultat vers le découpage.
+- [x] **Vérifier les offsets** : pour quelques sources du dataset, `contenu[first:last]` doit afficher le bon passage.
+    -> Vérifié sur **toutes** les sources, pas seulement quelques-unes :
+
+    | Corrigé | Sources | Introuvables | Plage hors du fichier |
+    |---|---|---|---|
+    | docs | 100 | 0 | 0 |
+    | code | 99 | 0 | 0 |
+
+    -> Exemple : « What activation formats does the fused batched MoE layer return? » →
+       le passage commence bien par `def activation_formats(...)`.
+- [x] Ajouter une barre `tqdm`.
+    -> `tqdm(listed_files, desc="Reading files")`.
 
 ✅ Tu affiches le nombre de fichiers lus par extension, et les offsets du dataset tombent juste.
+    -> **1847 documents en 0,1 s** : 1641 `.py`, 178 `.md`, 28 `.txt`
+       (1969 fichiers − 122 vides). Offsets justes sur les deux corrigés.
 
 🎤 Pourquoi la façon d'ouvrir le fichier (`newline`, `encoding`) peut-elle décaler tous les offsets ?
+    -> Les offsets comptent des **caractères** dans le texte lu par Python, pas des octets sur
+       le disque. Tout ce qui change ce texte décale les positions qui suivent.
+    -> **`newline`** : par défaut (`None`), Python convertit `\r\n` en `\n` → un caractère de
+       moins par ligne. Dans un fichier Windows, la position N du fichier réel ne correspond
+       plus à la position N du texte lu, et l'écart grandit à chaque ligne.
+       Mesuré : `vllm/model_executor/layers/quantization/utils/__init__.py` fait
+       232 caractères avec `newline=None`, 235 avec `newline=""`.
+    -> **`encoding`** : un caractère accentué ou un emoji fait 1 caractère en UTF-8 bien
+       décodé, mais plusieurs avec un mauvais encodage (ex. `é` → `Ã©` en latin-1) → décalage
+       après chaque caractère non ASCII. Sans `encoding`, Python prend celui du système,
+       qui peut varier d'une machine à l'autre.
+    -> **Choix fait : `encoding="utf-8", newline=""`**. Le texte lu est exactement celui du
+       fichier sur le disque, donc les offsets désignent le contenu réel, quelle que soit la
+       machine.
+    -> Impact réel faible : 4 fichiers seulement en `\r\n` (3 dans `tests/`, 1 dans `vllm/`),
+       aucune source publique dedans, et tout le corpus est en UTF-8 valide.
+    -> La moulinette **ne lit pas** les fichiers du corpus (un chemin inexistant ne provoque
+       aucune erreur, tâche 2) : elle compare seulement des plages. Les offsets doivent donc
+       correspondre à ceux de la vérité terrain, d'où la vérification complète ci-dessus.
