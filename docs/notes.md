@@ -429,3 +429,280 @@ dans `src/config.py` (`RAW_DIR`, `EXTENSIONS`, `EXCLUDED_DIRS`).
     -> La moulinette **ne lit pas** les fichiers du corpus (un chemin inexistant ne provoque
        aucune erreur, tâche 2) : elle compare seulement des plages. Les offsets doivent donc
        correspondre à ceux de la vérité terrain, d'où la vérification complète ci-dessus.
+---
+
+### Tâche 6 — Chunking Markdown avec chonkie
+🎯 Découper les `.md` en chunks ≤ `max_chunk_size` avec leurs positions.
+
+🛠️
+**Architecture retenue** (`src/chunking.py`) : un découpeur par type de fichier, un seul code
+de découpage.
+
+| Fonction | Rôle |
+|---|---|
+| `_make_md_chunker(max_chunk_size)` | `RecursiveChunker` avec les règles Markdown |
+| `_make_py_chunker(max_chunk_size)` | `RecursiveChunker` avec les règles Python (tâche 7) |
+| `_chunk_doc(doc, chunker, max_chunk_size)` | un `Document` → liste de `Chunk`, avec garde-fou de taille |
+| `chunk_documents(docs, max_chunk_size)` | **publique** : crée les découpeurs une fois, choisit selon l'extension (dict), `tqdm` |
+
+Modèle pydantic ajouté : `Chunk(file_path, first_char_i, last_char_i, text)`.
+
+- [x] Lire la doc de `chonkie.RecursiveChunker` (et sa recette markdown).
+    -> Trois classes emboîtées : `RecursiveChunker` (l'outil) ← `RecursiveRules` (liste
+       ordonnée) ← `RecursiveLevel` (une façon de couper : `delimiters`, `whitespace`,
+       `include_delim`).
+    -> Algorithme : couper au niveau 1 ; chaque morceau trop grand est recoupé au niveau
+       suivant ; puis les morceaux voisins sont **regroupés** (glouton) tant qu'ils
+       tiennent dans `chunk_size`.
+    -> **Recettes (`from_recipe`) écartées** : elles importent `huggingface_hub` (absent)
+       et se téléchargent depuis Hugging Face. L'import a lieu **même avec un fichier
+       local** (`path=`), j'ai vérifié dans le code de chonkie. Les règles sont donc écrites
+       à la main.
+- [x] Attention : chonkie compte par défaut en **tokens**, le sujet en **caractères** → trouver comment configurer le tokenizer en mode caractères.
+    -> Faux problème : `RecursiveChunker` utilise déjà `tokenizer="character"` par défaut.
+    -> **Vrai piège : `chunk_size=2048` par défaut**, ce qui invaliderait tout le fichier
+       de résultats. On passe toujours `chunk_size=max_chunk_size`.
+- [x] Découper un fichier, afficher les chunks et leurs positions.
+    -> Règles Markdown retenues :
+
+    | # | Coupe sur | `include_delim` |
+    |---|---|---|
+    | 1 | `"\n# "`, `"\n## "`, `"\n### "`, `"\n#### "` | `"next"` (le titre ouvre le chunk suivant) |
+    | 2 | `"\n\n"` (paragraphes) | `"prev"` |
+    | 3 | `"\n"` (lignes) | `"prev"` |
+    | 4 | `". "`, `"! "`, `"? "` (phrases) | `"prev"` |
+    | 5 | espaces | |
+    | 6 | rien = caractère par caractère (filet de sécurité) | |
+
+    -> `lora.md` (9115 caractères) → 13 chunks contigus (fin de l'un = début du suivant,
+       de 0 à la fin du fichier). Un chunk va de 4694 à 6099 sur `### Using API Endpoints` ;
+       la source du corrigé est 4695 → 6098 (IoU ≈ 0,998).
+    -> Les chunks commencent par `\n` à cause de `include_delim="next"` : sans conséquence,
+       `text` reste égal à `content[start:end]`.
+- [x] Vérifier pour **chaque** chunk : `contenu[start:end] == chunk.text` et `end - start <= max_chunk_size`.
+    -> Vérifié par le main de `chunking.py` (`uv run python -m src.chunking [taille]`) :
+       206 fichiers `.md`/`.txt` → **860 chunks** à 2000, **3352** à 500. Aucune erreur.
+    -> **Sans le niveau 6**, chonkie a produit un chunk de **2517 caractères**
+       (`tests/prompts/summary.txt`). Cause : chonkie regroupe parfois des lignes au-delà de
+       `chunk_size`. Le niveau « caractères » recoupe alors ce bloc.
+    -> Effet secondaire mesuré sur tout le corpus : **une seule** coupe au milieu d'un mot,
+       à 2000 pile (`con|tact`), dans ce même `summary.txt` (sous-titres sur une seule
+       ligne de 17 317 caractères). Ses 11 autres coupes tombent sur des fins de phrase,
+       comme voulu. Aucune source des corrigés dans ce fichier → **pas de correction** :
+       il faudrait réécrire le regroupement de chonkie pour un mot coupé dans un fichier de
+       test.
+    -> Garde-fou dans `_chunk_doc` : `ValueError` avec fichier, plage et taille si un chunk
+       dépasse. On ne jette pas un chunk trop long en silence, cela ferait disparaître du
+       contenu de l'index.
+
+✅ Assertion vérifiée sur tous les `.md` du corpus.
+    -> Et sur les `.txt`, découpés avec les mêmes règles (sans titre, le niveau 1 ne trouve
+       rien et on passe aux paragraphes).
+
+🎤 Pourquoi couper sur les titres plutôt que tous les N caractères ?
+    -> Les sources du corrigé suivent la structure du document (une section, un
+       paragraphe). Un chunk qui couvre la même section a un IoU élevé avec la source ; une
+       coupe fixe tombe au milieu d'un mot, d'une phrase ou d'une section, et mélange deux
+       sujets dans un même chunk.
+    -> Mesuré, avec l'« atteignable » = il existe un chunk d'IoU ≥ 0,05 avec la source
+       attendue (le meilleur recall possible si la recherche était parfaite) :
+
+    | Règles (taille 2000) | Chunks `.md`/`.txt` | Sources docs atteignables |
+    |---|---|---|
+    | par défaut de chonkie (paragraphes d'abord) | 696 | 96 / 100 |
+    | titres d'abord (retenu) | 860 | **99 / 100** |
+
+    -> Un chunk centré sur une section a aussi un vocabulaire plus cohérent, ce qui aidera
+       BM25.
+
+---
+
+### Tâche 7 — Chunking Python
+🎯 Découper les `.py` selon leur structure (fonctions, classes).
+
+🛠️
+- [x] Lire la doc de `CodeChunker` (langage, taille, tokenizer en caractères).
+    -> `CodeChunker(tokenizer="character", chunk_size=2048, language="auto")` : il analyse
+       le code avec **tree-sitter** (arbre syntaxique) et regroupe les nœuds.
+    -> **Deux défauts mesurés** sur les 1641 `.py` :
+        1. **Positions en octets UTF-8, pas en caractères** : 588 chunks faux dans 63
+           fichiers, tous ceux qui contiennent des caractères non ASCII (`é` = 2 octets →
+           décalage). Exemple : `benchmarks/benchmark_dataset.py`, chunk annoncé
+           12410 → 13997 (1587) pour un texte de 1585 caractères.
+        2. **Dépasse la taille** : 4 chunks > 2000, jusqu'à 2027 (`flex_attention.py`),
+           même après conversion des positions.
+    -> Alternatives comparées (taille 2000) :
+
+    | Méthode | Chunks | Max | Positions | Sources code atteignables | Temps |
+    |---|---|---|---|---|---|
+    | A. `CodeChunker` + conversion octets → caractères | 12 469 | 2027 ✘ | ✔ après correction | 98 / 99 | 6,6 s |
+    | **B. `RecursiveChunker` + délimiteurs Python (retenu)** | 14 623 | 2000 ✔ | ✔ | 97 / 99 | 0,1 s |
+    | C. `RecursiveChunker` par défaut | 10 481 | 2000 ✔ | ✔ | 97 / 99 | 0,2 s |
+    | D. module `ast` (`lineno`/`end_lineno`) | non testé : plus de code, échoue sur un fichier mal formé | | | | |
+
+    -> **Choix : B**. Même code que le Markdown (seules les règles changent), aucun piège
+       d'offsets, facile à défendre en review. On perd 1 source atteignable sur 99 par
+       rapport à A.
+    -> Règles Python : niveaux 1-2 spécifiques, niveaux 3-6 comme le Markdown (sans les
+       phrases, sans intérêt dans du code).
+
+    | # | Coupe sur | `include_delim` |
+    |---|---|---|
+    | 1 | `"\nclass "`, `"\ndef "`, `"\nasync def "` | `"next"` |
+    | 2 | `"\n    def "`, `"\n    async def "` (méthodes, 4 espaces) | `"next"` |
+    | 3 | `"\n\n"` | `"prev"` |
+    | 4 | `"\n"` | `"prev"` |
+    | 5 | espaces | |
+    | 6 | caractère par caractère | |
+
+    -> Limite connue : un **décorateur** (`@property`) reste à la fin du chunk précédent,
+       car la coupe se fait sur `"\ndef "`. Ajouter `"\n@"` coupe alors entre le
+       décorateur et le `def` : même score atteignable (97), donc version simple gardée.
+- [x] Découper un fichier connu (ex. `vllm/lora/request.py`) et vérifier que les fonctions ne sont pas coupées au hasard.
+    -> 3 chunks : `0 → 226` (en-tête de licence et imports), `226 → 2162`
+       (`class LoRARequest(...)`), `2162 → 3178` (`def local_path(self, value)`). Les
+       coupes tombent sur la classe et sur une méthode.
+- [x] Mêmes vérifications que la tâche 6 (offsets + taille).
+    -> 1641 `.py` → **14 623 chunks** à 2000, 56 665 à 500. Toutes les assertions passent.
+- [x] Que deviennent une très longue fonction et un fichier avec erreur de syntaxe ?
+    -> **Fonction longue** (test fabriqué : 3401 caractères, 150 lignes sans ligne vide) :
+       coupée en `0 → 2000`, `2000 → 2201`, `2201 → 3401`. La première coupe tombe au
+       milieu d'une ligne (`compute(9` | `0)`) : c'est le regroupement de lignes de chonkie
+       qui dépasse, puis le niveau « caractères » qui recoupe (même cause que les 2517 de
+       la tâche 6). Aucun `.py` du corpus n'est concerné.
+    -> **Erreur de syntaxe** : aucun effet, la stratégie B ne fait aucune analyse
+       syntaxique, elle cherche seulement des délimiteurs. (Avec `ast`, `ast.parse` lèverait
+       une `SyntaxError` ; tree-sitter, lui, tolère les erreurs.)
+
+✅ Les deux stratégies tournent sur tout le corpus, toutes les assertions passent.
+    -> `chunk_documents` sur les 1847 documents : **15 483 chunks** (860 + 14 623) en
+       0,2 s. `make lint` passe sans erreur.
+    -> Effet de la taille sur les sources atteignables :
+
+    | `max_chunk_size` | Chunks | Docs atteignables | Code atteignables | Temps |
+    |---|---|---|---|---|
+    | 2000 | 15 483 | 99 / 100 | 97 / 99 | 0,2 s |
+    | 1000 | 30 917 | 100 / 100 | 98 / 99 | 0,3 s |
+    | 500 | 60 017 | 100 / 100 | 98 / 99 | 0,5 s |
+
+    -> Plus petit = plus de chunks atteignables, mais aussi plus de candidats pour la
+       recherche et moins de contexte par chunk. À trancher avec le recall réel
+       (tâche 13).
+
+🎤 En quoi tes deux stratégies sont-elles « distinctes » au sens du sujet ?
+    -> Elles coupent selon la **structure propre à chaque format** : les titres pour le
+       Markdown (sections), les `class`/`def` pour le Python (unités de code). Les
+       niveaux 1-2 diffèrent, et la coupe en phrases n'existe que pour le texte.
+    -> Le code est mutualisé (`_chunk_doc`) : seules les règles changent, choisies par
+       extension dans `chunk_documents`. Ajouter un format = une fonction `_make_*` et une
+       ligne dans le dictionnaire.
+
+---
+
+### Tâche 8 — Tokenisation pour la recherche
+🎯 Une fonction qui transforme un texte en liste de termes.
+
+**Pourquoi pas `bm25s.tokenize`** : il garde `enable_lora` entier et donne `llmengine` pour
+`LLMEngine`, sans découper les identifiants. Or presque toutes les questions en contiennent
+(`trust_remote_code`, `FP8_MIN`…) et le corpus est surtout du code.
+**rank-bm25** (utilisé par un collègue) n'a pas de tokenizer non plus : il attend des listes
+de termes, comme bm25s. Le choix de la bibliothèque se pose à la tâche 9 ; on garde bm25s
+(sauvegarde/chargement intégrés, scores précalculés).
+
+**Architecture** (`src/tokenizer.py`, pas `tokenize.py`, nom d'un module standard) :
+
+| Élément | Rôle |
+|---|---|
+| `_WORD_RE`, `_CAMEL_RE`, `_STOPWORDS` | constantes de module, compilées une seule fois |
+| `_split_snake(word)` | coupe aux `_`, sans morceaux vides |
+| `_split_camel(part)` | coupe aux changements de casse |
+| `tokenize(text, remove_stopwords=REMOVE_STOPWORDS)` | **publique** : enchaîne tout, filtre à la fin |
+
+Le chemin d'un texte :
+```
+"How does LLMEngine handle enable_lora?"
+ 1. mots          : How, does, LLMEngine, handle, enable_lora
+ 2-3. morceaux    : LLMEngine → LLM, Engine ; enable_lora → enable, lora
+ 4. assemblage    : mot entier + morceaux s'il y en a plus d'un, en minuscules
+ 5. filtre        : stop words et termes d'une lettre
+ → ['how', 'does', 'llmengine', 'llm', 'engine', 'handle', 'enable_lora', 'enable', 'lora']
+```
+
+🛠️
+- [x] Écrire la tokenisation, la tester sur `"How does LLMEngine handle enable_lora?"`.
+    -> Résultat ci-dessus. Le main de `tokenizer.py` (`uv run python -m src.tokenizer`)
+       vérifie 15 cas (`OK`/`BAD`) et affiche 4 phrases, dont la chaîne vide (→ `[]`).
+    -> **Mots** : `[A-Za-z0-9_]+` garde le `_` pour découper ensuite.
+    -> **snake_case** : `split("_")` puis on garde les morceaux non vides
+       (`__init__` → `init`, `a__b` → `a`, `b`).
+       Piège rencontré : supprimer (`pop`) dans une liste pendant qu'on la parcourt saute
+       des éléments (`___` laissait `['', '']`). On construit une **nouvelle** liste.
+    -> **CamelCase**, une forme par ligne de la regex :
+
+    | Forme | Exemple |
+    |---|---|
+    | `[A-Z]{2,}(?=s(?![a-z]))` | sigle au pluriel : `GPUs` → `GPU`, `s` |
+    | `[A-Z]+(?=[A-Z][a-z])` | sigle avant un mot : `LLM` dans `LLMEngine` |
+    | `[A-Z]?[a-z]+[0-9]*` | mot avec ses chiffres : `Engine`, `Qwen3` |
+    | `[A-Z]+[0-9]*` | sigle avec ses chiffres : `HTTP`, `FP8` |
+    | `[0-9]+` | nombre seul : `2048` |
+
+    -> La 1re forme a été ajoutée après une recherche dans le corpus : sans elle,
+       `GPUs` (279 fois dans les `.py`) donnait `GP`, `Us`, et `IDs` (227 fois) `I`, `Ds`.
+       Bonus : `GPUs` donne `gpu`, donc une question sur « GPU » retrouve « GPUs ».
+    -> Limites connues : `ROCm` → `RO`, `Cm` ; `MoE` → `Mo`, `E` ; `HANDLEhandle` →
+       `HANDL`, `Ehandle` (ambigu : aucune regex ne peut savoir). Le mot entier (`rocm`,
+       `moe`) étant toujours gardé, une question qui le cite le retrouve quand même.
+    -> **Doublons** : on supprime seulement ceux **d'un même mot** (`class` donnait
+       `class`, `class` : mot entier + son unique morceau). Ceux qui viennent de **deux mots
+       différents** sont gardés (`vLLM` et `LLM` → deux `llm`) : BM25 compte les
+       occurrences, donc pas de `set()` sur le résultat.
+    -> **Minuscules** sur le mot entier aussi : pour BM25, `LLM` et `llm` seraient deux
+       termes différents.
+- [x] Décider : stemming oui/non ? stop words oui/non ? → noter pour comparer plus tard.
+    -> **Stop words : oui, réglable.** Liste `STOPWORDS_EN` de bm25s (33 mots, dont les
+       mots-clés Python `if`, `for`, `in`, `is`, `not`, `and`, `or`), convertie en
+       `frozenset` : `in` sur un tuple compare élément par élément, sur un ensemble c'est
+       immédiat (et `frozenset` empêche de modifier la constante). Attention : `how`,
+       `what`, `does` n'y sont **pas**.
+    -> Réglage : `REMOVE_STOPWORDS` dans `config.py`, valeur par défaut du paramètre
+       `remove_stopwords`. Une seule source pour l'indexation et la recherche, sinon les
+       termes ne correspondraient plus.
+       Piège rencontré : `and` passe avant `or`. Il faut
+       `len(t) > 1 and (t not in _STOPWORDS or not remove_stopwords)` ; sans les
+       parenthèses, `remove_stopwords=False` laissait aussi passer les termes d'une
+       lettre.
+    -> **Termes d'une lettre : toujours retirés** (`s` de `What's`/`GPUs`, `v` de `vLLM`,
+       variables `i`, `x`).
+    -> **Stemming : non pour l'instant.** Il demande une dépendance (`PyStemmer`, absent) et
+       peut abîmer les identifiants. À tester à la tâche 13.
+    -> **Mesuré sur les 15 483 chunks** (taille 2000) :
+
+    | `remove_stopwords` | Temps | Termes | Distincts | Chunks sans terme |
+    |---|---|---|---|---|
+    | `True` | 1,4 s | 2 588 902 | 57 795 | 2 |
+    | `False` | 1,4 s | 2 820 243 (+9 %) | 57 827 | 2 |
+
+    -> Termes les plus fréquents (stop words retirés) : `self` (54 456), `config`, `model`,
+       `size`, `torch`, `num`, `vllm`, `none`, `tensor`, `def`, `from`, `import`.
+       `self`, `def`, `from`, `import`, `none` sont les « stop words du code » : piste à
+       tester à la tâche 13 (BM25 les pèse déjà peu, puisqu'ils sont partout).
+    -> **2 chunks ne donnent aucun terme** : vérifier à la tâche 9 que bm25s accepte une
+       liste vide.
+
+✅ Le même tokenizer sert aux chunks et aux questions.
+    -> `tokenize` est la seule fonction publique, avec un réglage centralisé dans
+       `config.py`. À la tâche 9, enregistrer aussi ce réglage avec l'index serait plus sûr
+       (un `index` lancé avec `True` puis un `search` avec `False` ne correspondraient
+       plus).
+
+🎤 Pourquoi garder à la fois `enable_lora` et `enable`, `lora` ?
+    -> **Les morceaux** servent quand la question n'écrit pas l'identifiant : « How do I
+       enable LoRA? » partage `enable` et `lora` avec un chunk qui contient seulement
+       `enable_lora`. Sans découpage, aucun terme commun.
+    -> **Le mot entier** sert quand la question cite l'identifiant exact : `enable_lora` est
+       beaucoup plus **rare** que `enable` ou `lora`, donc son IDF est élevé. Le chunk qui
+       le contient vraiment passe devant ceux qui parlent seulement de « lora » ou
+       d'« enable » séparément.
+    -> Garder les deux = **rappel** (les morceaux trouvent plus de chunks) **et précision**
+       (le mot entier classe mieux le bon).

@@ -22,11 +22,11 @@ Pour chaque tâche :
 📚 Format JSON des datasets, recall@k, IoU (§7).
 
 🛠️
-- [ ] Ouvrir `data/datasets/AnsweredQuestions/dataset_docs_public.json` et `dataset_code_public.json`.
-- [ ] Compter les questions, regarder les champs (`question`, `sources`, `answer`, autres ?).
-- [ ] Pour 3 ou 4 questions, aller lire dans le corpus la plage `first_character_index → last_character_index` indiquée.
-- [ ] Relever : quels dossiers / extensions reviennent dans les sources ? Quelle taille font les plages ?
-- [ ] Comparer avec la version `UnansweredQuestions` : qu'est-ce qui manque ?
+- [x] Ouvrir `data/datasets/AnsweredQuestions/dataset_docs_public.json` et `dataset_code_public.json`.
+- [x] Compter les questions, regarder les champs (`question`, `sources`, `answer`, autres ?).
+- [x] Pour 3 ou 4 questions, aller lire dans le corpus la plage `first_character_index → last_character_index` indiquée.
+- [x] Relever : quels dossiers / extensions reviennent dans les sources ? Quelle taille font les plages ?
+- [x] Comparer avec la version `UnansweredQuestions` : qu'est-ce qui manque ?
 
 ✅ Tu sais dire quels types de fichiers il faut indexer en priorité, et à quoi ressemble une « bonne » source.
 
@@ -38,11 +38,11 @@ Pour chaque tâche :
 🎯 Savoir évaluer un résultat avant même d'avoir un système.
 
 🛠️
-- [ ] Lire `data+moulinette/moulinette_pkg/README.md`.
-- [ ] Copier le binaire adapté à ta machine et le renommer `moulinette` (ne pas le commiter).
-- [ ] Écrire **à la main** un petit fichier JSON de résultats pour 1 ou 2 questions (format `StudentSearchResults`).
-- [ ] Le passer à `./moulinette evaluate_student_search_results ...` et observer le recall.
-- [ ] Essayer volontairement une source > 2000 caractères ou un mauvais `file_path` : que se passe-t-il ?
+- [x] Lire `data+moulinette/moulinette_pkg/README.md`.
+- [x] Copier le binaire adapté à ta machine et le renommer `moulinette` (ne pas le commiter).
+- [x] Écrire **à la main** un petit fichier JSON de résultats pour 1 ou 2 questions (format `StudentSearchResults`).
+- [x] Le passer à `./moulinette evaluate_student_search_results ...` et observer le recall.
+- [x] Essayer volontairement une source > 2000 caractères ou un mauvais `file_path` : que se passe-t-il ?
 
 ✅ Tu comprends exactement ce qui est validé et ce qui est compté.
 
@@ -56,10 +56,10 @@ Pour chaque tâche :
 📚 pydantic v2 : `BaseModel`, `Field(default_factory=...)`, héritage, unions `A | B` (§10).
 
 🛠️
-- [ ] Écrire les 8 modèles du sujet, avec docstrings.
-- [ ] Tester dans un `uv run python` : charger un dataset JSON avec `RagDataset.model_validate_json(...)`.
-- [ ] Tester un JSON malformé : quelle exception est levée ?
-- [ ] Sérialiser un objet avec `model_dump_json(indent=2)`.
+- [x] Écrire les 8 modèles du sujet, avec docstrings.
+- [x] Tester dans un `uv run python` : charger un dataset JSON avec `RagDataset.model_validate_json(...)`.
+- [x] Tester un JSON malformé : quelle exception est levée ?
+- [x] Sérialiser un objet avec `model_dump_json(indent=2)`.
 
 ✅ Les deux datasets publics se chargent sans erreur.
 
@@ -73,10 +73,10 @@ Pour chaque tâche :
 📚 Rôle de `__main__.py` et `python -m`, Python Fire (classe → sous-commandes) (§11).
 
 🛠️
-- [ ] Créer `src/__main__.py` avec une classe exposée via `fire.Fire(...)`.
-- [ ] Déclarer `index`, `search`, `search_dataset`, `answer`, `answer_dataset`, `evaluate` avec leurs options.
-- [ ] Vérifier `uv run python -m src --help` et `make run ARGS="search 'test' --k 3"`.
-- [ ] Tester `make debug` : tu tombes bien dans pdb ?
+- [x] Créer `src/__main__.py` avec une classe exposée via `fire.Fire(...)`.
+- [x] Déclarer `index`, `search`, `search_dataset`, `answer`, `answer_dataset`, `evaluate` avec leurs options.
+- [x] Vérifier `uv run python -m src --help` et `make run ARGS="search 'test' --k 3"`.
+- [x] Tester `make debug` : tu tombes bien dans pdb ?
 
 ✅ Chaque commande affiche ses arguments reçus.
 
@@ -92,11 +92,11 @@ Pour chaque tâche :
 📚 `pathlib`, encodage, fins de ligne, chemins relatifs (§1).
 
 🛠️
-- [ ] Parcourir récursivement `data/raw/` et filtrer les extensions retenues à la tâche 1.
-- [ ] Lire chaque fichier en gérant les erreurs (encodage, fichier illisible) sans planter.
-- [ ] Construire le `file_path` exactement au format `data/raw/vllm-0.10.1/...`.
-- [ ] **Vérifier les offsets** : pour quelques sources du dataset, `contenu[first:last]` doit afficher le bon passage.
-- [ ] Ajouter une barre `tqdm`.
+- [x] Parcourir récursivement `data/raw/` et filtrer les extensions retenues à la tâche 1.
+- [x] Lire chaque fichier en gérant les erreurs (encodage, fichier illisible) sans planter.
+- [x] Construire le `file_path` exactement au format `data/raw/vllm-0.10.1/...`.
+- [x] **Vérifier les offsets** : pour quelques sources du dataset, `contenu[first:last]` doit afficher le bon passage.
+- [x] Ajouter une barre `tqdm`.
 
 ✅ Tu affiches le nombre de fichiers lus par extension, et les offsets du dataset tombent juste.
 
@@ -110,10 +110,10 @@ Pour chaque tâche :
 📚 Découpage récursif, recettes markdown de chonkie, `start_index` / `end_index` (§2.2, §2.3).
 
 🛠️
-- [ ] Lire la doc de `chonkie.RecursiveChunker` (et sa recette markdown).
-- [ ] Attention : chonkie compte par défaut en **tokens**, le sujet en **caractères** → trouver comment configurer le tokenizer en mode caractères.
-- [ ] Découper un fichier, afficher les chunks et leurs positions.
-- [ ] Vérifier pour **chaque** chunk : `contenu[start:end] == chunk.text` et `end - start <= max_chunk_size`.
+- [x] Lire la doc de `chonkie.RecursiveChunker` (et sa recette markdown).
+- [x] Attention : chonkie compte par défaut en **tokens**, le sujet en **caractères** → trouver comment configurer le tokenizer en mode caractères.
+- [x] Découper un fichier, afficher les chunks et leurs positions.
+- [x] Vérifier pour **chaque** chunk : `contenu[start:end] == chunk.text` et `end - start <= max_chunk_size`.
 
 ✅ Assertion vérifiée sur tous les `.md` du corpus.
 
@@ -127,10 +127,10 @@ Pour chaque tâche :
 📚 Arbre syntaxique (AST), tree-sitter, `chonkie.CodeChunker` (§2.1). Comparer avec le module standard `ast`.
 
 🛠️
-- [ ] Lire la doc de `CodeChunker` (langage, taille, tokenizer en caractères).
-- [ ] Découper un fichier connu (ex. `vllm/lora/request.py`) et vérifier que les fonctions ne sont pas coupées au hasard.
-- [ ] Mêmes vérifications que la tâche 6 (offsets + taille).
-- [ ] Que deviennent une très longue fonction et un fichier avec erreur de syntaxe ?
+- [x] Lire la doc de `CodeChunker` (langage, taille, tokenizer en caractères).
+- [x] Découper un fichier connu (ex. `vllm/lora/request.py`) et vérifier que les fonctions ne sont pas coupées au hasard.
+- [x] Mêmes vérifications que la tâche 6 (offsets + taille).
+- [x] Que deviennent une très longue fonction et un fichier avec erreur de syntaxe ?
 
 ✅ Les deux stratégies tournent sur tout le corpus, toutes les assertions passent.
 
@@ -143,9 +143,79 @@ Pour chaque tâche :
 
 📚 Minuscules, stop words, stemming, découpage `snake_case` / `CamelCase` (§3).
 
+**Pourquoi pas `bm25s.tokenize` ?** Il garde `enable_lora` entier et ne découpe pas
+`LLMEngine` (→ `llmengine`). Or presque toutes les questions contiennent des identifiants
+(`trust_remote_code`, `FP8_MIN`, `LLM`…) et le corpus est surtout du code. On écrit donc
+notre propre tokenizer ; bm25s accepte directement des listes de termes (`list[list[str]]`).
+
+**Où** : `src/tokenizer.py` (pas `tokenize.py`, nom d'un module de la bibliothèque standard),
+fonction publique `tokenize(text: str) -> list[str]`.
+
 🛠️
-- [ ] Écrire la tokenisation, la tester sur `"How does LLMEngine handle enable_lora?"`.
-- [ ] Décider : stemming oui/non ? stop words oui/non ? → noter pour comparer plus tard.
+
+**Étape 1 — Extraire les mots bruts**
+- [x] `re.findall` avec une regex qui **garde le `_`** : `[A-Za-z0-9_]+`.
+- [x] Vérifier : `"How does LLMEngine handle enable_lora?"` →
+      `['How', 'does', 'LLMEngine', 'handle', 'enable_lora']` (ponctuation et espaces disparus).
+- [x] Compiler la regex une seule fois, en constante de module (`re.compile`) : elle servira
+      sur ~15 000 chunks.
+
+**Étape 2 — Découper le snake_case**
+- [x] Retirer les `_` du début et de la fin (`__init__` → `init`), puis `split("_")`.
+- [x] `enable_lora` → `enable`, `lora` ; `trust_remote_code` → `trust`, `remote`, `code`.
+- [x] Les chaînes vides produites par `__` doivent disparaître.
+
+**Étape 3 — Découper le CamelCase** (sur chaque morceau de l'étape 2, **avant** les minuscules)
+- [x] Regex proposée : `[A-Z]+(?=[A-Z][a-z])|[A-Z]?[a-z]+[0-9]*|[A-Z]+[0-9]*|[0-9]+`
+    - `[A-Z]+(?=[A-Z][a-z])` : une suite de majuscules suivie d'un mot (`LLM` dans `LLMEngine`) ;
+    - `[A-Z]?[a-z]+[0-9]*` : un mot, avec ses chiffres collés (`Engine`, `Qwen3`, `fp16`) ;
+    - `[A-Z]+[0-9]*` : un sigle (`HTTP`, `FP8`, `MIN`) ;
+    - `[0-9]+` : un nombre seul (`2048`).
+- [x] Vérifier sur ces cas :
+
+    | Entrée | Morceaux attendus |
+    |---|---|
+    | `LLMEngine` | `LLM`, `Engine` |
+    | `getHTTPResponse` | `get`, `HTTP`, `Response` |
+    | `Llama2Model` | `Llama2`, `Model` |
+    | `vLLM` | `v`, `LLM` |
+    | `FP8`, `fp16`, `Qwen3` | inchangés |
+    | `MoE` | `Mo`, `E` (imparfait, mais le mot entier `moe` est gardé) |
+
+**Étape 4 — Assembler les termes d'un mot**
+- [x] Toujours garder **le mot entier** en minuscules (`enable_lora`, `llmengine`).
+- [x] Ajouter les morceaux en minuscules **seulement s'il y en a plus d'un** (sinon
+      `handle` donnerait `handle`, `handle`).
+
+**Étape 5 — Filtrer**
+- [x] Stop words : `from bm25s.stopwords import STOPWORDS_EN` (33 mots courants : `a`, `the`,
+      `in`, `is`…). Attention : `how`, `what`, `does` **n'y sont pas**.
+- [x] Termes d'un seul caractère (`v`, `e`, `x`, `i`) : du bruit, à retirer.
+
+**Étape 6 — Rendre les choix réglables**
+- [x] Paramètres avec valeur par défaut, par exemple `remove_stopwords: bool = True`, ou
+      constantes dans `config.py`. Objectif : comparer les variantes à la tâche 13 sans
+      réécrire le code.
+
+**Étape 7 — Tester** (dans un `if __name__ == "__main__":`)
+- [x] Les sorties attendues :
+
+    | Entrée | Sortie attendue |
+    |---|---|
+    | `"How does LLMEngine handle enable_lora?"` | `how, does, llmengine, llm, engine, handle, enable_lora, enable, lora` |
+    | `"What's the default value of trust_remote_code in vLLM's LLM class?"` | `what, default, value, trust_remote_code, trust, remote, code, vllm, llm, llm, class` |
+    | `"FP8_MIN"` | `fp8_min, fp8, min` |
+    | `"__init__"` | `__init__, init`… ou seulement `__init__` : à toi de choisir |
+    | `""` | `[]`, sans erreur |
+
+- [x] Tokeniser tous les chunks de `chunk_documents` : mesurer le temps (doit rester de
+      l'ordre de quelques secondes) et le nombre de termes distincts.
+
+**Étape 8 — Décider et noter** (dans `notes.md`)
+- [x] Stop words : oui/non, et pourquoi.
+- [x] Stemming (`handles` → `handl`) : demande `PyStemmer` (non installé, `uv add PyStemmer`),
+      peut abîmer les identifiants. Proposition : **non pour l'instant**, à tester à la tâche 13.
+- [x] Mot entier + morceaux : oui (voir 🎤).
 
 ✅ Le même tokenizer sert aux chunks et aux questions.
 

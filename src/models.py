@@ -70,7 +70,20 @@ class Document(BaseModel):
 
 
 class Chunk(BaseModel):
+    """A piece of a corpus file, with its position in that file."""
+
     file_path: str
     first_char_i: int
     last_char_i: int
     text: str
+
+
+class IndexMetadata(BaseModel):
+    """What the index command saves next to the BM25 index.
+
+    ``chunks[i]`` is the chunk of result ``i`` of a search on the index.
+    """
+
+    max_chunk_size: int
+    remove_stopwords: bool
+    chunks: list[Chunk]
