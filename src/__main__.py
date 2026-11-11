@@ -5,6 +5,7 @@ Run with ``uv run python -m src <command> [options]``.
 
 import inspect
 import sys
+import time
 from typing import Annotated, List
 
 import fire
@@ -15,6 +16,9 @@ from pydantic import (
     ValidationError,
     validate_call,
 )
+
+from src.indexing import build_index, load_index
+from src.tokenizer import tokenize
 
 
 ChunkSize = Annotated[int, Field(ge=1, le=2000, strict=True)]
@@ -32,7 +36,10 @@ class CLI:
         Args:
             max_chunk_size: Maximum chunk length in characters (1 to 2000).
         """
-        pass
+        start_time = time.perf_counter()
+        _, chunks = build_index(max_chunk_size)
+        elapsed_time = time.perf_counter() - start_time
+        print(f"Done in {elapsed_time:.1f} s")
 
     @validate_call
     def search(self, query: Query, k: K = 10) -> None:
@@ -42,7 +49,17 @@ class CLI:
             query: The question to search for.
             k: Number of sources to return (1 to 10).
         """
-        pass
+        retriever, metadata = load_index()
+        tokens = tokenize(query, remove_stopwords=metadata.remove_stopwords)
+        chunk_ids, scores = retriever.retrieve([tokens], k=k,
+                                               show_progress=False)
+        print(f"Query: {query}  (index: max_chunk_size="
+              f"{metadata.max_chunk_size})")
+        for rank, (chunk_id, score) in enumerate(
+                zip(chunk_ids[0], scores[0]), start=1):
+            chunk = metadata.chunks[chunk_id]
+            print(f"{rank:>2}. {score:6.2f}  {chunk.file_path} "
+                  f"[{chunk.first_char_i}:{chunk.last_char_i}]")
 
     @validate_call
     def search_dataset(self,

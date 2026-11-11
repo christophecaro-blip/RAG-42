@@ -706,3 +706,265 @@ Le chemin d'un texte :
        d'« enable » séparément.
     -> Garder les deux = **rappel** (les morceaux trouvent plus de chunks) **et précision**
        (le mot entier classe mieux le bon).
+
+---
+
+### Tâche 9 — Index BM25 et persistance
+🎯 La commande `index` construit et sauvegarde l'index dans `data/processed/`.
+
+**Ce qui est sauvegardé** (deux écritures, deux outils, chacun relit ce qu'il a écrit) :
+
+| Ce qui est écrit | Où | Écrit par | Relu par | Sert à |
+|---|---|---|---|---|
+| l'index BM25 | dossier `data/processed/bm25/` (5 fichiers `.npy` + `.json`) | `retriever.save` (bm25s) | `bm25s.BM25.load` | calculer le score de chaque chunk |
+| les métadonnées | fichier `data/processed/index.json` | `write_text` + `model_dump_json` (pydantic) | `read_text` + `IndexMetadata.model_validate_json` | retrouver fichier + plage d'un résultat, tokeniser la question pareil |
+
+Le lien entre les deux : le résultat `i` d'une recherche est `metadata.chunks[i]`. L'ordre
+des chunks est le même partout, car `corpus_tokens` est construit dans l'ordre de `chunks`.
+
+🛠️
+- [x] Construire l'index BM25 à partir des chunks tokenisés.
+    -> `bm25s.BM25()` puis `.index(corpus_tokens)`. Les 2 chunks sans aucun terme (vus à
+       la tâche 8) sont acceptés par bm25s sans erreur.
+- [x] Sauvegarder l'index **et** les métadonnées des chunks (chemin, début, fin).
+    -> `index.json` garde aussi `max_chunk_size` et `remove_stopwords` : `search` saura avec
+       quels réglages l'index a été construit.
+    -> Tailles : `bm25/` 9,9 Mo, `index.json` 22 Mo (il contient le **texte** de chaque
+       chunk, soit une copie du corpus indexé ; l'index BM25 ne stocke que des nombres).
+- [x] Recharger l'index dans un autre processus et vérifier qu'il est identique.
+    -> `load_index()` : `bm25s.BM25.load(dossier, show_progress=False)`, puis
+       `read_text` → chaîne JSON → `IndexMetadata.model_validate_json` → objet validé.
+    -> Test en **deux processus séparés** (sinon on teste l'objet en mémoire, pas le
+       disque) : le 1er construit et cherche les 199 questions publiques (k=10), le 2e ne
+       fait que recharger et chercher. **0/199 question avec un résultat différent**
+       (chunks, plages et scores identiques), métadonnées identiques.
+    -> Les questions sont tokenisées avec `metadata.remove_stopwords` (réglage enregistré
+       avec l'index), pas avec `config.py` : indexation et recherche restent cohérentes
+       même si `config.py` change entre les deux.
+    -> **Index absent** : bm25s lève une `FileNotFoundError` sur `params.index.json`,
+       incompréhensible pour un correcteur. `load_index` l'attrape et relève
+       `FileNotFoundError("No index found in data/processed/: run the 'index' command
+       first.") from e`. Approche « EAFP » (essayer puis traduire l'erreur) plutôt que
+       vérifier avant : elle couvre n'importe lequel des fichiers manquants. L'affichage
+       sans traceback se fera dans la CLI (tâche 14).
+- [x] Mesurer le temps total d'indexation (limite : 5 min).
+
+    | `max_chunk_size` | Chunks | Temps `index` |
+    |---|---|---|
+    | 2000 | 15 483 | 2,8 s |
+    | 500 | 60 017 | 3,7 s |
+
+    -> Chargement : 0,19 s. Recherche des 199 questions : 0,06 s (limite tâche 11 : 90 s).
+
+✅ `uv run python -m src index --max_chunk_size 2000` affiche `Done in 2.8 s`.
+    -> Tests : valeur par défaut OK, `0` → `Input should be greater than or equal to 1`,
+       `abc` → `Input should be a valid integer` (validation pydantic de la tâche 4).
+
+**Pièges rencontrés**
+- `index = _BM25_DIR` ne charge rien : ça donne juste un autre nom au chemin.
+- `load` attend un **dossier**, pas un fichier : avec `'index.json'`, bm25s cherchait
+  `index.json/params.index.json`. Lire le message d'erreur l'a montré.
+- Ordre des appels imbriqués : Python évalue de l'intérieur vers l'extérieur.
+  `read_text(IndexMetadata.model_validate_json())` appelait pydantic **avant** d'avoir lu le
+  fichier. Deux lignes (lire, puis convertir) sont plus claires.
+- `showprogress=False` (faute de frappe) est **accepté sans erreur** : `load` a des
+  `**kwargs`, qui acceptent n'importe quel nom d'argument. Ni Python ni mypy ne le voient.
+- Fire **affiche** ce que renvoie une commande : un `return chunks` dans `index` aurait
+  imprimé 15 483 chunks (22 Mo). Une commande renvoie `None` et affiche avec `print`.
+- `-> list[Chunks]` (nom inexistant) cassait **toutes** les commandes : `@validate_call`
+  lit la signature dès la définition de la classe.
+
+🎤 Explique BM25 avec tes mots. Qu'apporte-t-il par rapport à TF-IDF ?
+    -> *(à rédiger avec tes mots, §4 de concepts.md)*
+
+🎤 Pourquoi `except FileNotFoundError` et pas `except Exception` ?
+    -> On attrape seulement l'erreur qu'on sait traiter. `except Exception` ferait passer
+       une faute de frappe (`NameError`), un fichier abîmé (`ValueError`) ou un problème de
+       droits (`PermissionError`) pour « lance `index` d'abord » : on cacherait le vrai bug
+       derrière une explication fausse.
+
+🎤 Pourquoi `raise` plutôt que `print` dans `load_index` ?
+    -> `raise` **arrête** la fonction : avec un `print`, elle continuerait et planterait plus
+       loin (`read_data` n'existe pas), ou renverrait quelque chose d'inutilisable.
+    -> L'appelant décide quoi faire (afficher, réessayer, quitter). `load_index` ne sait pas
+       qu'elle est appelée par une CLI : ce pourrait être un test ou un notebook.
+       Signaler = `load_index` ; afficher = la CLI.
+
+---
+
+### Tâche 10 — Commande `search`
+🎯 Une question → top-k sources affichées.
+
+**Le chemin d'une question** (l'inverse de l'indexation) :
+```
+question ─ load_index() ─ tokenize(query, remove_stopwords=metadata.remove_stopwords)
+         ─ retriever.retrieve([tokens], k=k, show_progress=False)  → chunk_ids, scores
+         ─ metadata.chunks[chunk_id]                                → fichier + plage
+         ─ print
+```
+
+🛠️
+- [x] Charger l'index, tokeniser la requête, récupérer les k meilleurs chunks.
+    -> **Index absent** : rien à faire dans `search`. La `FileNotFoundError` levée par
+       `load_index` **remonte toute seule** jusqu'au programme. L'attraper pour la relancer
+       telle quelle (`except ... as e: raise e`) ne servirait à rien. L'afficher sans
+       traceback = tâche 14, dans le bloc `__main__`, à côté de `except ValidationError`.
+    -> **Tokenisation** avec `metadata.remove_stopwords` (réglage enregistré avec l'index),
+       pas la valeur par défaut de `config.py`, qui a pu changer depuis le dernier `index`.
+    -> **`retrieve` travaille par paquets** : elle attend une **liste de questions**, d'où
+       `[tokens]` pour une seule. Elle renvoie deux tableaux numpy à 2 dimensions (une
+       ligne par question, k colonnes), scores déjà triés du meilleur au moins bon :
+       ```
+       chunk_ids = [[ 926 1693  932]]   shape (1, 3) → ligne [0] = notre question
+       scores    = [[9.61 9.44 8.75]]
+       ```
+- [x] Afficher fichier, plage et score.
+    -> `for rank, (chunk_id, score) in enumerate(zip(chunk_ids[0], scores[0]), start=1)`.
+       `zip` parcourt numéros et scores **par paires** ; `enumerate` ajoute le rang. Les
+       parenthèses de `(chunk_id, score)` sont nécessaires : `enumerate` renvoie
+       `(rang, élément)` et l'élément est lui-même une paire.
+    -> Format : `{rank:>2}` (aligné à droite), `{score:6.2f}` (2 décimales, 6 caractères),
+       plage `[first_char_i:last_char_i]`. En-tête : la question et le `max_chunk_size` de
+       l'index (utile pour comparer les tailles à la tâche 13).
+       ```
+       Query: What HTTP endpoint is used to dynamically load a LoRA adapter?  (index: max_chunk_size=2000)
+        1.  20.14  data/raw/vllm-0.10.1/docs/features/lora.md [4694:6099]
+        2.  15.14  data/raw/vllm-0.10.1/vllm/plugins/lora_resolvers/README.md [0:830]
+       ```
+- [x] Tester avec quelques questions du dataset : la bonne source apparaît-elle ?
+
+    | Question (début) | Source attendue | Rang (k=5) |
+    |---|---|---|
+    | [docs] What HTTP endpoint… LoRA adapter | `docs/features/lora.md` | **1** |
+    | [docs] What command… accuracy of a quantized | `docs/features/quantization/int8.md` | 4 |
+    | [docs] What method… LLM class… embeddings | `docs/models/pooling_models.md` | 3 |
+    | [code] What activation formats… fused batched MoE | `fused_moe/fused_batched_moe.py` | absente |
+    | [code] What are the default values for FP8_MIN and FP8_MAX | `attention/ops/triton_flash_attention.py` | absente |
+    | [code] What determines whether… sampler returns Pythonized | `model_executor/layers/sampler.py` | **1** |
+
+    -> Le code est plus difficile que la doc (cohérent avec les seuils 80 % / 50 %).
+       Pistes pour la tâche 13 : les plages attendues sont courtes (FP8 : 93 caractères)
+       face à des chunks de 2000 ; voir pourquoi `FP8_MIN` ne remonte pas.
+
+    | Cas limite | Résultat |
+    |---|---|
+    | `--k 1` | 1 résultat |
+    | `--k 0` / `--k 11` | refusés : `Input should be greater than or equal to 1` / `less than or equal to 10` |
+    | `""` et `"   "` | refusés : `String should have at least 1 character` (`strip_whitespace`) |
+    | `"zzzz"` | **3 chunks au hasard, score 0.00** : bm25s renvoie toujours k résultats, même sans aucun terme commun → à traiter à la tâche 14 (ignorer les scores à 0 ? message « aucun résultat » ?) |
+    | index absent | `FileNotFoundError: No index found in data/processed/: run the 'index' command first.` (encore avec traceback → tâche 14) |
+
+✅ `search "What HTTP endpoint is used to dynamically load a LoRA adapter?" --k 5` renvoie
+`docs/features/lora.md` en 1re position (score 20.14).
+
+**Pièges rencontrés**
+- `retrieve()` sans argument : bm25s ne sait pas quoi chercher. Et son résultat n'est pas
+  un « retriever » mais deux tableaux → deux variables (`chunk_ids, scores`).
+- **`k` oublié** : bm25s prend sa valeur par défaut (10). `--k 3` était validé par
+  pydantic puis **ignoré**, sans erreur. Invisible avec `--k 10` : tester d'autres valeurs.
+- `k=k` : à gauche le **nom du paramètre** de bm25s, à droite **ma variable**. Même chose
+  que `remove_stopwords=metadata.remove_stopwords`.
+- `id` comme nom de variable **masque la fonction intégrée** `id()` (comme `list`, `type`,
+  `sum`, `max`). Liste au pluriel (`scores`), élément de boucle au singulier (`score`).
+- **Boucle insérée au milieu d'un appel** coupé sur deux lignes : la parenthèse de
+  `retrieve(` n'était pas refermée → `SyntaxError` qui casse **tout le fichier**. Une
+  instruction n'est finie que quand toutes ses parenthèses sont refermées.
+- `zip(chunk_ids, scores)` sans `[0]` parcourt les **lignes** (une par question) : un seul
+  tour de boucle avec tous les numéros d'un coup.
+- **`=` écrit, il ne lit pas** : `metadata.chunks[chunk_id] = value` **remplaçait** le chunk
+  par le score (en mémoire seulement). À gauche ce qui reçoit, à droite ce qui est lu :
+  `chunk = metadata.chunks[chunk_id]`.
+- **Affectation en chaîne** : `chunk = metadata.chunks[chunk_id] = value` range `value`
+  dans les deux à la fois. Un seul `=` par ligne.
+- `make lint` s'arrête au premier échec : une erreur flake8 (E501) empêchait mypy de
+  tourner. « Erreur mypy » ≠ erreur flake8 : lire quel outil parle.
+- flake8 ne signale pas les variables inutilisées créées par découpage (`a, b = ...`).
+
+🎤 Pourquoi tokeniser la question avec `metadata.remove_stopwords` et pas avec `config.py` ?
+    -> La question doit être tokenisée **exactement** comme les chunks. `config.py` donne
+       le réglage d'aujourd'hui, `metadata` celui qui a réellement servi à l'indexation.
+
+🎤 Pourquoi `retrieve` attend-elle une liste de listes alors qu'on n'a qu'une question ?
+    -> bm25s est conçu pour chercher beaucoup de questions d'un coup (plus rapide). Une
+       question = une liste de termes, donc un paquet de questions = une liste de listes.
+       On en profitera à la tâche 11 (199 questions en un seul appel).
+
+🎤 Que se passe-t-il si `search` est lancée avant `index` ?
+    -> `load_index` lève `FileNotFoundError` avec un message clair ; elle remonte jusqu'au
+       programme. Pour l'instant la traceback s'affiche ; la CLI l'attrapera (tâche 14).
+
+---
+
+### Tâche 11 — Commande `search_dataset` (en cours)
+
+#### Étape 0 — Refactoring : la recherche sort de la CLI (`src/searching.py`)
+
+**Pourquoi.** Le cœur de `search` (tokeniser → `retrieve` → `metadata.chunks[i]`) va
+servir à **4 commandes** : `search`, `search_dataset`, `answer`, `answer_dataset`. Copié
+4 fois, un bug corrigé à un endroit resterait aux trois autres. On le met dans **une
+fonction** qui **renvoie** les résultats sans rien afficher ; chaque commande fait sa propre
+sortie (`print` ou JSON). Même principe qu'à la tâche 9 : calculer d'un côté, afficher de
+l'autre.
+
+**Décisions de conception**
+
+| Question | Choix | Pourquoi |
+|---|---|---|
+| Où ? | nouveau module `src/searching.py` | `__main__.py` est la CLI ; c'est la CLI qui importe les modules, jamais l'inverse |
+| Nom ? | `search_chunks` | ne pas confondre avec la commande `search` de la CLI (dont le nom est imposé par le sujet) |
+| Index ? | reçu en **paramètre** (`retriever`, `metadata`) | chargé **une seule fois** par la commande : `load_index` × 200 questions ≈ 40 s perdues sur 90 |
+| Une question ou plusieurs ? | `queries: list[str]` | `retrieve` travaille par paquets ; `search` passe `[query]`, `search_dataset` les 199 d'un coup |
+| Type des questions ? | `str`, pas `Query` | `Query` est un type de **validation CLI** ; la fonction reçoit des questions déjà validées |
+| Retour ? | `list[list[tuple[Chunk, float]]]` | une liste par question, ses k paires `(chunk, score)`, meilleur en premier |
+
+```python
+def search_chunks(retriever: BM25, metadata: IndexMetadata,
+                  queries: list[str],
+                  k: int) -> list[list[tuple[Chunk, float]]]:
+```
+
+**Le corps, en 3 temps**
+1. Tokeniser **chaque** question (compréhension, comme `corpus_tokens` dans `build_index`),
+   avec `metadata.remove_stopwords` → une liste de listes de termes.
+2. `retriever.retrieve(tokens, k=k, show_progress=False)`, **sans** crochets en plus :
+   `tokens` est déjà une liste de listes.
+3. Deux boucles imbriquées : l'extérieure sur les **questions** (lignes des deux tableaux),
+   l'intérieure sur les **résultats** d'une question ; chaque résultat devient
+   `(metadata.chunks[chunk_id], float(score))`.
+
+Avec 2 questions et `k=2`, bm25s renvoie une ligne par question :
+```
+chunk_ids = [[ 926 1693]      scores = [[9.61 9.44]     ← "How to enable LoRA?"
+             [ 821 2574]]               [3.28 3.08]]    ← "What is FP8?"
+```
+
+**Vérifié** : `search_chunks(r, m, ['How to enable LoRA?', 'What is FP8?'], k=2)` → 2
+listes de 2 paires, mêmes scores que `retrieve` en direct, scores de type `float`.
+`make lint` passe.
+
+**Pièges rencontrés**
+- `tokenize(query)` avec une **liste** → `TypeError: expected string ... got 'list'`.
+  **mypy l'avait vu avant l'exécution** (`arg-type`) : c'est à ça que servent les types.
+- Une `)` en trop (`show_progress=False))`) → `SyntaxError: unmatched ')'`, tout le fichier
+  est illisible.
+- **Mêmes noms dans les deux boucles** (`for chunk_id, score in zip(chunk_id, score)`) :
+  marche par chance (`zip` lit avant que les noms soient écrasés), mais illisible.
+  Extérieure au pluriel (`question_ids`, `question_scores`), intérieure au singulier.
+- Ajouter le **numéro** (`chunk_id`) au lieu du **chunk** (`metadata.chunks[chunk_id]`).
+- `numpy.float32` ≠ `float` : `float(score)` pour respecter la signature (et le JSON).
+- `.append((a, b))` : doubles parenthèses (l'appel + la paire). `.append(a, b)` plante.
+- Liste vide non annotée (`results = []`) : mypy ne sait pas ce qu'elle contiendra →
+  `results: list[list[tuple[Chunk, float]]] = []`.
+- Code laissé **après** le `return` : jamais exécuté (code mort), à supprimer.
+- Renommer la **commande** `search` de la CLI au lieu de la nouvelle fonction : le sujet
+  impose les noms des commandes.
+- Une fonction sans corps (le `pass` supprimé) → `IndentationError` qui casse **toutes**
+  les commandes. Garder `pass` ou `...` tant que le corps n'est pas écrit.
+
+**Reste** : faire utiliser `search_chunks` par la commande `search` (affichage
+**identique** à avant : c'est un refactoring, on change la structure, pas le
+comportement), puis écrire `search_dataset` (étapes 1 à 5 de `tasks.md`).
+
+🎤 Pourquoi factoriser la recherche dans une fonction plutôt que la copier dans chaque commande ?
+    -> Une seule version du code : un bug corrigé l'est partout, un réglage changé (tâche
+       13) s'applique partout. Et la fonction se teste seule, sans passer par la CLI.

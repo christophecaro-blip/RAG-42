@@ -47,16 +47,24 @@ def build_index(max_chunk_size: int) -> tuple[bm25s.BM25, list[Chunk]]:
 
 
 def load_index() -> tuple[bm25s.BM25, IndexMetadata]:
-    """Load the saved index (not written yet)."""
+    """Load the index saved by ``build_index``.
 
+    Returns:
+        The BM25 index and its metadata, in the same order as
+        ``build_index``: result ``i`` of a search is ``metadata.chunks[i]``.
 
-if __name__ == "__main__":
-    # Temporary test: build the index and run one query on it.
-    test_retriever, test_chunks = build_index(2000)
-    question = "How does vLLM load a LoRA adapter dynamically through the API?"
-    results, scores = test_retriever.retrieve([tokenize(question)], k=3)
-    print(question)
-    for i, score in zip(results[0], scores[0]):
-        c = test_chunks[i]
-        print(f"  {score:6.2f}  {c.file_path} "
-              f"[{c.first_char_i}:{c.last_char_i}]")
+    Raises:
+        FileNotFoundError: If the index, or part of it, is missing from
+            ``PROCESSED_DIR``.
+    """
+    try:
+        index = bm25s.BM25.load(str(_BM25_DIR), show_progress=False)
+        read_data = _METADATA_PATH.read_text(encoding="utf-8")
+    except FileNotFoundError as e:
+        raise FileNotFoundError(
+            f"No index found in {PROCESSED_DIR}/: "
+            "run the 'index' command first.") from e
+
+    metadata = IndexMetadata.model_validate_json(read_data)
+
+    return index, metadata
